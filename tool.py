@@ -1,10 +1,3 @@
-"""
-heightmap2map.py
-Heightmap → NetRadiant Brush Prefab Generator
-Requires: PyQt6, Pillow
-Install:  pip install PyQt6 Pillow
-"""
-
 import sys
 import os
 import math
@@ -14,10 +7,10 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QFileDialog, QSpinBox, QDoubleSpinBox,
     QLineEdit, QCheckBox, QGroupBox, QGridLayout, QTextEdit,
-    QSizePolicy, QSplitter, QFrame, QProgressBar, QComboBox
+    QSizePolicy, QSplitter, QFrame, QProgressBar, QComboBox, QScrollArea
 )
-from PyQt6.QtGui import QPixmap, QImage, QPainter, QColor, QPen, QFont
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QRect
+from PyQt6.QtGui import QPixmap, QImage, QPainter, QColor, QPen, QFont, QPolygonF, QBrush
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QRect, QPointF
 
 try:
     from PIL import Image
@@ -27,12 +20,11 @@ except ImportError:
     sys.exit(1)
 
 
-# ─── Worker thread ────────────────────────────────────────────────────────────
 
 class GeneratorWorker(QThread):
     progress = pyqtSignal(int)
     log      = pyqtSignal(str)
-    finished = pyqtSignal(str)  # emits the .map string
+    finished = pyqtSignal(str, list)
 
     def __init__(self, params):
         super().__init__()
@@ -147,15 +139,22 @@ class GeneratorWorker(QThread):
         output = '\n'.join(lines) + '\n'
         self.progress.emit(100)
         self.log.emit(f"Done. {len(brushes)} brushes, {len(output)//1024}kb")
-        self.finished.emit(output)
+
+        # Build side profile: sample centre row (ny=0.5) across full X range
+        profile = []
+        for gx in range(res):
+            h = sample((gx + 0.5) / res, 0.5) * maxH
+            profile.append(h)
+
+        self.finished.emit(output, profile)
 
 
-# ─── Heightmap Preview Widget ─────────────────────────────────────────────────
 
 class HeightmapView(QLabel):
     def __init__(self):
         super().__init__()
-        self.setMinimumSize(300, 300)
+        self.setMinimumSize(300, 200)
+        self.setMaximumHeight(340)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.setStyleSheet("background:#111; border:1px solid #333;")
@@ -215,13 +214,130 @@ class HeightmapView(QLabel):
             self._render()
 
 
-# ─── Main Window ──────────────────────────────────────────────────────────────
+
+class SideProfileView(QLabel):
+    """Draws a 2D side-on cross-section of the terrain (X vs Z)."""
+
+    PAD = 36
+
+    def __init__(self):
+        super().__init__()
+        self.setMinimumSize(300, 140)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setFixedHeight(180)
+        self.setStyleSheet("background:#0d0d0d; border:1px solid #333;")
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.setText("Generate terrain to see side profile")
+        self._profile   = [] 
+        self._max_h     = 256.0
+        self._floor_h   = 16.0
+        self._terrain_w = 1024.0
+
+    def set_profile(self, profile, max_h, floor_h, terrain_w):
+        self._profile   = profile
+        self._max_h     = max_h
+        self._floor_h   = floor_h
+        self._terrain_w = terrain_w
+        self.setText('')
+        self._render()
+
+    def _render(self):
+        if not self._profile:
+            return
+
+        W = self.width()  or 400
+        H = self.height() or 180
+        pad = self.PAD
+
+        qimg = QImage(W, H, QImage.Format.Format_RGB32)
+        qimg.fill(QColor(13, 13, 13))
+        p = QPainter(qimg)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        draw_w = W - pad * 2
+        draw_h = H - pad * 2 - 4
+
+        z_total  = self._max_h + self._floor_h
+        z_origin = H - pad   # y-pixel of Z=0 (world ground)
+
+        def world_to_px(gx_norm, world_z):
+            px = pad + gx_norm * draw_w
+            py = z_origin - (world_z / z_total) * (draw_h + self._floor_h / z_total * draw_h)
+            # map world_z in [-floor_h .. max_h] to pixel range
+            py = z_origin - ((world_z + self._floor_h) / z_total) * draw_h
+            return QPointF(px, py)
+
+        n = len(self._profile)
+
+        p.setPen(QPen(QColor(40, 40, 40), 1))
+        for frac in [0.25, 0.5, 0.75, 1.0]:
+            world_z = frac * self._max_h
+            pt = world_to_px(0, world_z)
+            p.drawLine(QPointF(pad, pt.y()), QPointF(W - pad, pt.y()))
+
+        floor_top    = world_to_px(0, 0)
+        floor_bottom = world_to_px(0, -self._floor_h)
+        p.fillRect(
+            int(pad), int(floor_bottom.y()),
+            draw_w, int(floor_top.y() - floor_bottom.y()),
+            QColor(30, 18, 10)
+        )
+
+        poly = QPolygonF()
+        poly.append(world_to_px(0.0, -self._floor_h))
+        poly.append(world_to_px(0.0, -self._floor_h))
+        for i, h in enumerate(self._profile):
+            poly.append(world_to_px(i / (n - 1) if n > 1 else 0, h))
+        poly.append(world_to_px(1.0, -self._floor_h))
+
+        p.setBrush(QBrush(QColor(34, 85, 40, 180)))
+        p.setPen(Qt.PenStyle.NoPen)
+        p.drawPolygon(poly)
+
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.setPen(QPen(QColor(57, 220, 90), 2))
+        for i in range(n - 1):
+            p.drawLine(
+                world_to_px(i / (n - 1), self._profile[i]),
+                world_to_px((i + 1) / (n - 1), self._profile[i + 1])
+            )
+
+        p.setPen(QPen(QColor(100, 100, 100), 1, Qt.PenStyle.DashLine))
+        p.drawLine(QPointF(pad, floor_top.y()), QPointF(W - pad, floor_top.y()))
+
+        p.setPen(QPen(QColor(120, 120, 120)))
+        font = QFont('Courier', 8)
+        p.setFont(font)
+
+        p.drawText(2, int(world_to_px(0, self._max_h).y()) + 4, f"{int(self._max_h)}")
+        p.drawText(2, int(floor_top.y()) + 4, "0")
+        p.drawText(2, int(floor_bottom.y()) + 4, f"-{int(self._floor_h)}")
+
+        p.drawText(pad, H - 4, "0")
+        label_w = f"{int(self._terrain_w)}"
+        p.drawText(W - pad - len(label_w) * 6, H - 4, label_w)
+
+        p.setPen(QPen(QColor(80, 80, 80)))
+        p.drawText(W // 2 - 10, H - 2, "X →")
+        p.save()
+        p.translate(10, H // 2)
+        p.rotate(-90)
+        p.drawText(-10, 0, "Z ↑")
+        p.restore()
+
+        p.end()
+        self.setPixmap(QPixmap.fromImage(qimg))
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if self._profile:
+            self._render()
 
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Heightmap → NetRadiant Brush Prefab Generator")
-        self.setMinimumSize(900, 620)
+        self.setMinimumSize(900, 740)
         self._image     = None
         self._map_str   = None
         self._worker    = None
@@ -237,13 +353,11 @@ class MainWindow(QMainWindow):
         splitter = QSplitter(Qt.Orientation.Horizontal)
         root.addWidget(splitter)
 
-        # ── Left panel ──────────────────────────────────────
         left = QWidget()
         left.setMaximumWidth(340)
         lv = QVBoxLayout(left)
         lv.setSpacing(8)
 
-        # Image load
         img_grp = QGroupBox("Heightmap Image")
         ig = QVBoxLayout(img_grp)
         self.img_label = QLabel("No image loaded")
@@ -255,7 +369,6 @@ class MainWindow(QMainWindow):
         ig.addWidget(btn_load)
         lv.addWidget(img_grp)
 
-        # Terrain scale
         scale_grp = QGroupBox("Terrain Scale")
         sg = QGridLayout(scale_grp)
 
@@ -299,7 +412,6 @@ class MainWindow(QMainWindow):
 
         lv.addWidget(scale_grp)
 
-        # Brush options
         brush_grp = QGroupBox("Brush Options")
         bg = QVBoxLayout(brush_grp)
 
@@ -320,7 +432,6 @@ class MainWindow(QMainWindow):
 
         lv.addWidget(brush_grp)
 
-        # Generate / Save buttons
         self.btn_generate = QPushButton("Generate .MAP")
         self.btn_generate.setEnabled(False)
         self.btn_generate.setFixedHeight(36)
@@ -342,26 +453,33 @@ class MainWindow(QMainWindow):
         lv.addStretch()
         splitter.addWidget(left)
 
-        # ── Right panel ──────────────────────────────────────
+        right_scroll = QScrollArea()
+        right_scroll.setWidgetResizable(True)
+        right_scroll.setFrameShape(QFrame.Shape.NoFrame)
         right = QWidget()
         rv = QVBoxLayout(right)
         rv.setSpacing(8)
 
         rv.addWidget(QLabel("Heightmap Preview (colourised by height):"))
         self.preview = HeightmapView()
-        rv.addWidget(self.preview, stretch=1)
+        rv.addWidget(self.preview)
+
+        rv.addWidget(QLabel("Side Profile (centre cross-section, X vs Z):"))
+        self.side_profile = SideProfileView()
+        rv.addWidget(self.side_profile)
 
         rv.addWidget(QLabel("Log:"))
         self.log = QTextEdit()
         self.log.setReadOnly(True)
-        self.log.setMaximumHeight(120)
+        self.log.setFixedHeight(100)
         self.log.setStyleSheet("background:#0a0a0a; color:#aaa; font-family:monospace; font-size:11px;")
         rv.addWidget(self.log)
+        rv.addStretch()
 
-        splitter.addWidget(right)
+        right_scroll.setWidget(right)
+        splitter.addWidget(right_scroll)
         splitter.setSizes([340, 560])
 
-    # ── Slots ────────────────────────────────────────────────────────────────
 
     def _load_image(self):
         path, _ = QFileDialog.getOpenFileName(
@@ -413,11 +531,17 @@ class MainWindow(QMainWindow):
         self._worker.finished.connect(self._on_done)
         self._worker.start()
 
-    def _on_done(self, map_str):
+    def _on_done(self, map_str, profile):
         self._map_str = map_str
         self.btn_generate.setEnabled(True)
         self.btn_save.setEnabled(True)
         self.progress.setVisible(False)
+        self.side_profile.set_profile(
+            profile,
+            max_h     = self.spin_h.value(),
+            floor_h   = self.spin_floor.value(),
+            terrain_w = self.spin_w.value(),
+        )
 
     def _save(self):
         if not self._map_str:
@@ -437,8 +561,6 @@ class MainWindow(QMainWindow):
     def _log(self, msg):
         self.log.append(msg)
 
-
-# ─── Entry point ──────────────────────────────────────────────────────────────
 
 def main():
     app = QApplication(sys.argv)
