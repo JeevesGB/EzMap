@@ -1,0 +1,748 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Heightmap → NetRadiant Brush Generator</title>
+<link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Orbitron:wght@400;700;900&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0a0c0f;
+    --panel: #0f1318;
+    --border: #1e2d20;
+    --accent: #39ff6a;
+    --accent2: #00d4ff;
+    --accent3: #ff6b35;
+    --text: #c8e6c9;
+    --muted: #4a6b4e;
+    --grid: rgba(57,255,106,0.04);
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Share Tech Mono', monospace;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  body::before {
+    content: '';
+    position: fixed; inset: 0;
+    background-image:
+      linear-gradient(var(--grid) 1px, transparent 1px),
+      linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+    background-size: 32px 32px;
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .scanlines {
+    position: fixed; inset: 0;
+    background: repeating-linear-gradient(
+      0deg,
+      transparent,
+      transparent 2px,
+      rgba(0,0,0,0.12) 2px,
+      rgba(0,0,0,0.12) 4px
+    );
+    pointer-events: none;
+    z-index: 1;
+  }
+
+  .container {
+    position: relative;
+    z-index: 2;
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 24px 20px;
+  }
+
+  header {
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 18px;
+    margin-bottom: 28px;
+  }
+
+  .logo {
+    font-family: 'Orbitron', sans-serif;
+    font-weight: 900;
+    font-size: 1.5rem;
+    color: var(--accent);
+    letter-spacing: 0.1em;
+    text-shadow: 0 0 20px rgba(57,255,106,0.5);
+  }
+
+  .logo span { color: var(--accent2); }
+
+  .subtitle {
+    font-size: 0.72rem;
+    color: var(--muted);
+    margin-top: 4px;
+    letter-spacing: 0.15em;
+  }
+
+  .grid-layout {
+    display: grid;
+    grid-template-columns: 340px 1fr;
+    gap: 20px;
+    align-items: start;
+  }
+
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 2px;
+    padding: 18px;
+    position: relative;
+  }
+
+  .panel::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 2px;
+    background: linear-gradient(90deg, var(--accent), transparent);
+  }
+
+  .panel-title {
+    font-family: 'Orbitron', sans-serif;
+    font-size: 0.65rem;
+    font-weight: 700;
+    letter-spacing: 0.2em;
+    color: var(--accent);
+    margin-bottom: 16px;
+    text-transform: uppercase;
+  }
+
+  /* Drop zone */
+  .drop-zone {
+    border: 1px dashed var(--muted);
+    border-radius: 2px;
+    padding: 28px 16px;
+    text-align: center;
+    cursor: pointer;
+    transition: all 0.2s;
+    background: rgba(57,255,106,0.02);
+    margin-bottom: 16px;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .drop-zone:hover, .drop-zone.drag-over {
+    border-color: var(--accent);
+    background: rgba(57,255,106,0.05);
+    box-shadow: inset 0 0 20px rgba(57,255,106,0.05);
+  }
+
+  .drop-zone input[type=file] {
+    position: absolute; inset: 0;
+    opacity: 0; cursor: pointer; width: 100%; height: 100%;
+  }
+
+  .drop-icon {
+    font-size: 2rem;
+    margin-bottom: 8px;
+    display: block;
+  }
+
+  .drop-text { font-size: 0.75rem; color: var(--muted); }
+  .drop-text strong { color: var(--text); display: block; margin-bottom: 4px; }
+
+  /* Controls */
+  .control-group { margin-bottom: 14px; }
+
+  label {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 0.7rem;
+    color: var(--muted);
+    margin-bottom: 5px;
+    letter-spacing: 0.08em;
+  }
+
+  label .val {
+    color: var(--accent);
+    font-size: 0.75rem;
+    min-width: 48px;
+    text-align: right;
+  }
+
+  input[type=range] {
+    -webkit-appearance: none;
+    width: 100%; height: 3px;
+    background: var(--border);
+    border-radius: 0;
+    outline: none;
+  }
+
+  input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 12px; height: 12px;
+    background: var(--accent);
+    cursor: pointer;
+    border-radius: 0;
+    box-shadow: 0 0 8px rgba(57,255,106,0.6);
+  }
+
+  input[type=number], input[type=text], select {
+    width: 100%;
+    background: #080a0d;
+    border: 1px solid var(--border);
+    color: var(--text);
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 0.75rem;
+    padding: 7px 10px;
+    border-radius: 0;
+    outline: none;
+    transition: border-color 0.2s;
+  }
+
+  input[type=number]:focus, input[type=text]:focus, select:focus {
+    border-color: var(--accent);
+  }
+
+  select option { background: #080a0d; }
+
+  .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+
+  .btn {
+    width: 100%;
+    padding: 11px;
+    font-family: 'Orbitron', sans-serif;
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 0.15em;
+    border: none;
+    cursor: pointer;
+    border-radius: 0;
+    transition: all 0.2s;
+    text-transform: uppercase;
+  }
+
+  .btn-primary {
+    background: var(--accent);
+    color: #000;
+    box-shadow: 0 0 20px rgba(57,255,106,0.3);
+  }
+
+  .btn-primary:hover:not(:disabled) {
+    background: #5fff80;
+    box-shadow: 0 0 30px rgba(57,255,106,0.5);
+  }
+
+  .btn-primary:disabled {
+    background: var(--muted);
+    color: #1a1a1a;
+    cursor: not-allowed;
+    box-shadow: none;
+  }
+
+  .btn-secondary {
+    background: transparent;
+    color: var(--accent2);
+    border: 1px solid var(--accent2);
+    margin-top: 8px;
+  }
+
+  .btn-secondary:hover:not(:disabled) {
+    background: rgba(0,212,255,0.1);
+  }
+
+  .btn-secondary:disabled {
+    opacity: 0.3; cursor: not-allowed;
+  }
+
+  /* Preview area */
+  .preview-wrap {
+    aspect-ratio: 1;
+    background: #060809;
+    border: 1px solid var(--border);
+    border-radius: 2px;
+    overflow: hidden;
+    position: relative;
+    margin-bottom: 14px;
+    display: flex; align-items: center; justify-content: center;
+  }
+
+  .preview-wrap canvas { max-width: 100%; max-height: 100%; display: block; }
+
+  .preview-placeholder {
+    font-size: 0.7rem;
+    color: var(--muted);
+    text-align: center;
+    line-height: 1.8;
+  }
+
+  /* Stats */
+  .stats-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 8px;
+    margin-top: 12px;
+  }
+
+  .stat {
+    background: rgba(57,255,106,0.04);
+    border: 1px solid var(--border);
+    padding: 8px 10px;
+    text-align: center;
+  }
+
+  .stat-val {
+    font-family: 'Orbitron', sans-serif;
+    font-size: 1rem;
+    font-weight: 700;
+    color: var(--accent);
+    line-height: 1;
+  }
+
+  .stat-lbl {
+    font-size: 0.58rem;
+    color: var(--muted);
+    letter-spacing: 0.1em;
+    margin-top: 3px;
+    text-transform: uppercase;
+  }
+
+  /* Log */
+  .log {
+    background: #060809;
+    border: 1px solid var(--border);
+    padding: 10px 12px;
+    font-size: 0.67rem;
+    color: var(--muted);
+    height: 80px;
+    overflow-y: auto;
+    line-height: 1.7;
+    margin-top: 12px;
+  }
+
+  .log .ok { color: var(--accent); }
+  .log .warn { color: var(--accent3); }
+  .log .info { color: var(--accent2); }
+
+  .section-sep {
+    border: none;
+    border-top: 1px solid var(--border);
+    margin: 14px 0;
+  }
+
+  .tag {
+    display: inline-block;
+    background: rgba(57,255,106,0.1);
+    color: var(--accent);
+    font-size: 0.6rem;
+    padding: 2px 7px;
+    letter-spacing: 0.1em;
+    border: 1px solid rgba(57,255,106,0.3);
+    margin-bottom: 10px;
+  }
+
+  .hint {
+    font-size: 0.63rem;
+    color: var(--muted);
+    line-height: 1.6;
+    margin-top: 6px;
+  }
+
+  @keyframes pulse-glow {
+    0%, 100% { box-shadow: 0 0 20px rgba(57,255,106,0.2); }
+    50% { box-shadow: 0 0 40px rgba(57,255,106,0.5); }
+  }
+
+  .generating { animation: pulse-glow 1s ease-in-out infinite; }
+
+  .checkbox-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.7rem;
+    color: var(--muted);
+    margin-bottom: 10px;
+  }
+
+  input[type=checkbox] {
+    accent-color: var(--accent);
+    width: 14px; height: 14px;
+  }
+</style>
+</head>
+<body>
+<div class="scanlines"></div>
+<div class="container">
+  <header>
+    <div class="logo">HEIGHT<span>MAP</span>.MAP</div>
+    <div class="subtitle">// NETRADIANT BRUSH PREFAB GENERATOR — QUAKE .MAP FORMAT</div>
+  </header>
+
+  <div class="grid-layout">
+    <!-- LEFT: Controls -->
+    <div>
+      <div class="panel">
+        <div class="panel-title">▸ Input</div>
+
+        <div class="drop-zone" id="dropZone">
+          <input type="file" id="fileInput" accept="image/*">
+          <span class="drop-icon">⬡</span>
+          <div class="drop-text">
+            <strong>Drop heightmap image</strong>
+            PNG / JPG / BMP — grayscale<br>white = high, black = low
+          </div>
+        </div>
+
+        <hr class="section-sep">
+        <div class="panel-title">▸ Terrain Scale</div>
+
+        <div class="control-group">
+          <label>Grid Resolution <span class="val" id="resVal">32×32</span></label>
+          <input type="range" id="resolution" min="4" max="64" value="32" step="4">
+          <div class="hint">Cells across terrain. Higher = more brushes, more detail.</div>
+        </div>
+
+        <div class="row2">
+          <div class="control-group">
+            <label>Width (units)</label>
+            <input type="number" id="terrainW" value="1024" min="64" max="8192" step="64">
+          </div>
+          <div class="control-group">
+            <label>Depth (units)</label>
+            <input type="number" id="terrainD" value="1024" min="64" max="8192" step="64">
+          </div>
+        </div>
+
+        <div class="control-group">
+          <label>Max Height (units) <span class="val" id="heightVal">256</span></label>
+          <input type="range" id="maxHeight" min="32" max="1024" value="256" step="16">
+        </div>
+
+        <div class="control-group">
+          <label>Min Height (floor) <span class="val" id="floorVal">16</span></label>
+          <input type="range" id="floorHeight" min="4" max="128" value="16" step="4">
+          <div class="hint">Minimum brush thickness (prevents zero-height brushes).</div>
+        </div>
+
+        <hr class="section-sep">
+        <div class="panel-title">▸ Brush Options</div>
+
+        <div class="control-group">
+          <label>Texture</label>
+          <input type="text" id="texture" value="textures/common/terrain" placeholder="textures/common/terrain">
+        </div>
+
+        <div class="control-group">
+          <label>Top Face Texture</label>
+          <input type="text" id="topTexture" value="textures/base_floor/clangdark" placeholder="same as sides or override">
+        </div>
+
+        <div class="checkbox-row">
+          <input type="checkbox" id="wrapEntity" checked>
+          <label style="margin:0;color:var(--text)">Wrap brushes in func_group entity</label>
+        </div>
+
+        <div class="checkbox-row">
+          <input type="checkbox" id="invertMap">
+          <label style="margin:0;color:var(--text)">Invert heightmap (dark = high)</label>
+        </div>
+
+        <button class="btn btn-primary" id="generateBtn" disabled>⬡ GENERATE .MAP</button>
+        <button class="btn btn-secondary" id="downloadBtn" disabled>↓ DOWNLOAD terrain.map</button>
+      </div>
+    </div>
+
+    <!-- RIGHT: Preview + Output -->
+    <div>
+      <div class="panel">
+        <div class="panel-title">▸ Heightmap Preview</div>
+        <div class="preview-wrap" id="previewWrap">
+          <div class="preview-placeholder" id="placeholder">
+            No image loaded<br>
+            <span style="font-size:0.6rem">Upload a grayscale heightmap to preview</span>
+          </div>
+          <canvas id="previewCanvas" style="display:none"></canvas>
+        </div>
+
+        <div style="display:flex;gap:8px">
+          <div style="flex:1">
+            <div class="panel-title" style="margin-bottom:8px">▸ Heightmap Visualiser</div>
+            <canvas id="vizCanvas" width="100%" style="width:100%;border:1px solid var(--border);display:block;background:#060809;aspect-ratio:1"></canvas>
+          </div>
+        </div>
+
+        <div class="stats-grid" id="statsGrid" style="display:none">
+          <div class="stat"><div class="stat-val" id="sBrushes">0</div><div class="stat-lbl">Brushes</div></div>
+          <div class="stat"><div class="stat-val" id="sPlanes">0</div><div class="stat-lbl">Planes</div></div>
+          <div class="stat"><div class="stat-val" id="sSize">0kb</div><div class="stat-lbl">File Size</div></div>
+        </div>
+
+        <div class="log" id="log"><span class="info">// Ready. Load a heightmap to begin.</span></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ─── State ────────────────────────────────────────────────────────────────
+let imgData = null;
+let mapOutput = null;
+let imgEl = null;
+
+// ─── Helpers ──────────────────────────────────────────────────────────────
+function log(msg, type='') {
+  const el = document.getElementById('log');
+  el.innerHTML += `<div class="${type}">${msg}</div>`;
+  el.scrollTop = el.scrollHeight;
+}
+
+function sampleHeight(pixels, imgW, imgH, nx, ny) {
+  // nx, ny in [0,1] — bilinear sample of grayscale
+  const px = Math.min(nx * imgW, imgW - 1);
+  const py = Math.min(ny * imgH, imgH - 1);
+  const x0 = Math.floor(px), y0 = Math.floor(py);
+  const x1 = Math.min(x0 + 1, imgW - 1), y1 = Math.min(y0 + 1, imgH - 1);
+  const fx = px - x0, fy = py - y0;
+
+  function px4(x, y) {
+    const i = (y * imgW + x) * 4;
+    return (pixels[i] * 0.299 + pixels[i+1] * 0.587 + pixels[i+2] * 0.114) / 255;
+  }
+
+  return (
+    px4(x0,y0)*(1-fx)*(1-fy) +
+    px4(x1,y0)*fx*(1-fy) +
+    px4(x0,y1)*(1-fx)*fy +
+    px4(x1,y1)*fx*fy
+  );
+}
+
+// ─── Load image ───────────────────────────────────────────────────────────
+function loadImage(file) {
+  const reader = new FileReader();
+  reader.onload = e => {
+    imgEl = new Image();
+    imgEl.onload = () => {
+      // Draw to offscreen canvas to read pixels
+      const oc = document.createElement('canvas');
+      oc.width = imgEl.width; oc.height = imgEl.height;
+      const ctx = oc.getContext('2d');
+      ctx.drawImage(imgEl, 0, 0);
+      imgData = ctx.getImageData(0, 0, imgEl.width, imgEl.height);
+
+      // Show preview
+      const pc = document.getElementById('previewCanvas');
+      pc.width = imgEl.width; pc.height = imgEl.height;
+      pc.getContext('2d').drawImage(imgEl, 0, 0);
+      pc.style.display = 'block';
+      document.getElementById('placeholder').style.display = 'none';
+
+      drawViz();
+      document.getElementById('generateBtn').disabled = false;
+      log(`<span class="ok">✓ Loaded:</span> ${file.name} (${imgEl.width}×${imgEl.height})`);
+    };
+    imgEl.src = e.target.result;
+  };
+  reader.readAsDataURL(file);
+}
+
+// ─── Height visualiser (isometric-ish top-down gradient) ──────────────────
+function drawViz() {
+  if (!imgData) return;
+  const canvas = document.getElementById('vizCanvas');
+  canvas.width = canvas.offsetWidth || 400;
+  canvas.height = canvas.width;
+  const ctx = canvas.getContext('2d');
+  const res = parseInt(document.getElementById('resolution').value);
+  const W = canvas.width, H = canvas.height;
+  const cw = W / res, ch = H / res;
+  const invert = document.getElementById('invertMap').checked;
+
+  for (let gy = 0; gy < res; gy++) {
+    for (let gx = 0; gx < res; gx++) {
+      let h = sampleHeight(imgData.data, imgData.width, imgData.height,
+                            (gx+0.5)/res, (gy+0.5)/res);
+      if (invert) h = 1 - h;
+      // colour by height: deep teal → mid green → bright yellow
+      const r = Math.round(h * h * 220);
+      const g = Math.round(80 + h * 175);
+      const b = Math.round(40 + (1-h)*60);
+      ctx.fillStyle = `rgb(${r},${g},${b})`;
+      ctx.fillRect(gx*cw, gy*ch, cw+1, ch+1);
+    }
+  }
+}
+
+// ─── .MAP Generation ──────────────────────────────────────────────────────
+function generateMap() {
+  if (!imgData) return;
+
+  const res      = parseInt(document.getElementById('resolution').value);
+  const terrW    = parseFloat(document.getElementById('terrainW').value);
+  const terrD    = parseFloat(document.getElementById('terrainD').value);
+  const maxH     = parseFloat(document.getElementById('maxHeight').value);
+  const floorH   = parseFloat(document.getElementById('floorHeight').value);
+  const tex      = document.getElementById('texture').value.trim() || 'textures/common/terrain';
+  const topTex   = document.getElementById('topTexture').value.trim() || tex;
+  const wrapEnt  = document.getElementById('wrapEntity').checked;
+  const invert   = document.getElementById('invertMap').checked;
+
+  const cellW = terrW / res;
+  const cellD = terrD / res;
+  const offsetX = -terrW / 2;
+  const offsetZ = -terrD / 2;
+
+  log('<span class="info">// Generating brush geometry…</span>');
+
+  const brushes = [];
+
+  for (let gy = 0; gy < res; gy++) {
+    for (let gx = 0; gx < res; gx++) {
+      // Sample 4 corners (normalised [0,1])
+      let h00 = sampleHeight(imgData.data, imgData.width, imgData.height, gx/res,       gy/res);
+      let h10 = sampleHeight(imgData.data, imgData.width, imgData.height, (gx+1)/res,   gy/res);
+      let h01 = sampleHeight(imgData.data, imgData.width, imgData.height, gx/res,       (gy+1)/res);
+      let h11 = sampleHeight(imgData.data, imgData.width, imgData.height, (gx+1)/res,   (gy+1)/res);
+
+      if (invert) { h00=1-h00; h10=1-h10; h01=1-h01; h11=1-h11; }
+
+      // Scale to world units
+      const z00 = h00 * maxH;
+      const z10 = h10 * maxH;
+      const z01 = h01 * maxH;
+      const z11 = h11 * maxH;
+
+      const zTop = Math.max(z00, z10, z01, z11);
+      const zBot = -floorH; // floor below 0
+
+      // World XY of cell corners (Quake: X right, Y forward/into screen, Z up)
+      const x0 = offsetX + gx * cellW;
+      const x1 = offsetX + (gx+1) * cellW;
+      const y0 = offsetZ + gy * cellD;
+      const y1 = offsetZ + (gy+1) * cellD;
+
+      // Each cell = one brush with a sloped top face
+      // Brush defined by 6 planes (Quake .map plane format):
+      //   ( x1 y1 z1 ) ( x2 y2 z2 ) ( x3 y3 z3 ) TEXTURE offsetX offsetY rot scaleX scaleY
+
+      const T = tex;
+      const TT = topTex;
+      const S = '0 0 0 1 1'; // default UV params
+
+      // Helper: format plane from 3 points
+      function plane(p1, p2, p3, t=T) {
+        const fmt = p => `${p[0].toFixed(1)} ${p[1].toFixed(1)} ${p[2].toFixed(1)}`;
+        return `( ${fmt(p1)} ) ( ${fmt(p2)} ) ( ${fmt(p3)} ) ${t} ${S}`;
+      }
+
+      // For a sloped-top terrain brush we need the top face to follow the heightmap.
+      // We use a trick: define the top as 2 triangles (split cell diagonally).
+      // NetRadiant supports non-axis-aligned planes fine.
+      // We'll create 2 triangular "sliver" brushes per cell for accuracy.
+      
+      function makeTri(ax,ay,az, bx,by,bz, cx,cy,cz) {
+        // Triangle top: A, B, C
+        // Bottom is flat at zBot
+        const A = [ax, ay, az], B = [bx, by, bz], C = [cx, cy, cz];
+        const Ab = [ax, ay, zBot], Bb = [bx, by, zBot], Cb = [cx, cy, zBot];
+        
+        // 5 planes: top (sloped), bottom, and 3 sides
+        const lines = [];
+        lines.push(plane(A, C, B, TT));          // top (sloped) — winding outward-up
+        lines.push(plane(Ab, Bb, Cb));            // bottom
+        lines.push(plane(A, B, Bb));              // side AB
+        lines.push(plane(B, C, Cb));              // side BC
+        lines.push(plane(C, A, Ab));              // side CA
+        return '{\n' + lines.join('\n') + '\n}';
+      }
+
+      // Split cell diagonally (0,0)-(1,1)
+      const triA = makeTri(x0, y0, z00,  x1, y0, z10,  x1, y1, z11);
+      const triB = makeTri(x0, y0, z00,  x1, y1, z11,  x0, y1, z01);
+      brushes.push(triA, triB);
+    }
+  }
+
+  // Assemble .map file
+  let map = '// Generated by Heightmap.MAP — NetRadiant brush prefab\n';
+  map += '// ' + new Date().toISOString() + '\n\n';
+
+  if (wrapEnt) {
+    map += '{\n"classname" "func_group"\n"_type" "terrain"\n';
+    for (const b of brushes) map += b + '\n';
+    map += '}\n';
+  } else {
+    map += '{\n"classname" "worldspawn"\n';
+    for (const b of brushes) map += b + '\n';
+    map += '}\n';
+  }
+
+  mapOutput = map;
+
+  // Stats
+  const byteCount = new Blob([map]).size;
+  document.getElementById('sBrushes').textContent = brushes.length;
+  document.getElementById('sPlanes').textContent = brushes.length * 5;
+  document.getElementById('sSize').textContent = byteCount > 1024*1024
+    ? (byteCount/1024/1024).toFixed(1)+'mb'
+    : Math.round(byteCount/1024)+'kb';
+  document.getElementById('statsGrid').style.display = 'grid';
+
+  document.getElementById('downloadBtn').disabled = false;
+  log(`<span class="ok">✓ Done.</span> ${brushes.length} brushes, ${Math.round(byteCount/1024)}kb`, 'ok');
+  drawViz();
+}
+
+// ─── Download ─────────────────────────────────────────────────────────────
+function download() {
+  if (!mapOutput) return;
+  const blob = new Blob([mapOutput], { type: 'text/plain' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'terrain.map';
+  a.click();
+  log('<span class="ok">↓ Downloaded terrain.map</span>');
+}
+
+// ─── Event wiring ─────────────────────────────────────────────────────────
+document.getElementById('fileInput').addEventListener('change', e => {
+  if (e.target.files[0]) loadImage(e.target.files[0]);
+});
+
+const dz = document.getElementById('dropZone');
+dz.addEventListener('dragover', e => { e.preventDefault(); dz.classList.add('drag-over'); });
+dz.addEventListener('dragleave', () => dz.classList.remove('drag-over'));
+dz.addEventListener('drop', e => {
+  e.preventDefault();
+  dz.classList.remove('drag-over');
+  if (e.dataTransfer.files[0]) loadImage(e.dataTransfer.files[0]);
+});
+
+document.getElementById('generateBtn').addEventListener('click', () => {
+  const btn = document.getElementById('generateBtn');
+  btn.classList.add('generating');
+  btn.disabled = true;
+  setTimeout(() => {
+    generateMap();
+    btn.classList.remove('generating');
+    btn.disabled = false;
+  }, 60);
+});
+
+document.getElementById('downloadBtn').addEventListener('click', download);
+
+// Live slider labels
+const sliders = { resolution: 'resVal', maxHeight: 'heightVal', floorHeight: 'floorVal' };
+for (const [id, valId] of Object.entries(sliders)) {
+  const el = document.getElementById(id);
+  const lbl = document.getElementById(valId);
+  const fmt = id === 'resolution' ? v => `${v}×${v}` : v => v;
+  lbl.textContent = fmt(el.value);
+  el.addEventListener('input', () => { lbl.textContent = fmt(el.value); drawViz(); });
+}
+
+document.getElementById('invertMap').addEventListener('change', drawViz);
+</script>
+</body>
+</html>
