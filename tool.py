@@ -336,7 +336,7 @@ class SideProfileView(QLabel):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Heightmap → NetRadiant Brush Prefab Generator")
+        self.setWindowTitle("EzMap - Heightmap to .MAP Converter")
         self.setMinimumSize(900, 740)
         self._image     = None
         self._map_str   = None
